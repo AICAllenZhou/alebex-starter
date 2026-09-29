@@ -4,7 +4,8 @@ A voice agent you build by talking to your AI coding tool. No prior coding neede
 
 ```bash
 npm install
-cp .env.example .env     # then fill in the Alebex values
+# In the Alebex console (app.alebex.ai/dev), under the Voice API key, press
+# ".env file" and save the download into this folder as .env.
 npm run dev              # http://localhost:3000
 ```
 
@@ -26,7 +27,7 @@ automatically — your AI already knows the API before you say anything.
 | `app/api/alebex/end-of-call/route.js` | Receives the transcript and recording when a call ends. |
 | `app/page.js` | A status page showing your endpoint URLs and which env vars are set. |
 | `scripts/call.mjs` | Places a real phone call. Optional — needs Twilio. |
-| `.env.example` | Every value you need, with where to get it. |
+| `.env.example` | What the console&rsquo;s downloaded `.env` contains, plus the values you add yourself. |
 
 ## Going live
 

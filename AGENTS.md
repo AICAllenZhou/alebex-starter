@@ -2,17 +2,20 @@
 
 You are helping someone who is **not a programmer** build a voice agent on the
 Alebex Voice API. This file is the complete API contract — endpoints, request and
-response shapes, limits, error codes and two working examples. You do not need to
+response shapes, limits, error codes and working examples. You do not need to
 search the web, and there is no SDK to install.
 
 **Before you write code**
 
 - Ask what the agent should accomplish on the call and who it is talking to. One
   question at a time, in plain language. Do not ask about frameworks or hosting.
-- Say which parts live where: the agent's prompt, voice and model are configured in
-  the Alebex console at `app.alebex.ai/dev`, not in this repo. This repo holds the
-  agent's **tools** (things it can look up or do mid-call) and the **end-of-call
-  webhook**.
+- Say which parts live where. The agent itself — its prompt, voice, first message
+  and settings — can be built in the console at `app.alebex.ai/dev` **or** through
+  **Manage agents** below; both make the same agent. This repo holds the agent's
+  **tools** (things it can look up or do mid-call) and the **end-of-call webhook**.
+- The `.env` in this folder was downloaded from the console's **.env file** button.
+  It already holds `ALEBEX_API_KEY`, `ALEBEX_AGENT_ID`, `ALEBEX_API_URL` and
+  `ALEBEX_ENGINE_URL`. Read them from `process.env`; never hard-code a host or key.
 
 **What to build here**
 
@@ -20,8 +23,14 @@ search the web, and there is no SDK to install.
   `check-stock`: check the `Authorization` header against `TOOL_SECRET`, read
   `body.arguments`, return small JSON with values a person could hear out loud.
 - Keep `app/api/alebex/end-of-call/route.js` answering `2xx`.
-- Update `scripts/call.mjs` so its `customTools` array declares every tool you add —
-  tools are not registered anywhere in advance, they travel with each call.
+- **Getting a tool onto the agent — two routes, prefer the first:**
+  1. *Stored and attached.* Once the route is deployed, register it as a tool
+     (console **Tools** page, or `POST /public/tools` in **Manage tools**) and attach
+     it to the agent's `toolIds`. Every call that agent takes then carries it, and
+     the console's test call carries it too, so the person can test with no code.
+  2. *Sent with the call.* `scripts/call.mjs` can pass a `customTools` array. A call
+     with that array uses **exactly** those tools and sets the attached ones aside —
+     so never send an empty array by accident; omit the field instead.
 
 **Rules that will bite otherwise**
 
@@ -33,6 +42,9 @@ search the web, and there is no SDK to install.
   `unmark_call_screening`, `list_available_slots`, `book_appointment`,
   `cancel_appointment`, `reschedule_appointment`, `get_appointments`, or anything
   starting `get_skill_`.
+- Agent and tool management errors come back as
+  `{ "success": false, "error": { "code", "message", "status" } }`; call errors as
+  `{ "code", "message", "detail" }`. Branch on `code`, not on the message text.
 - Never put a real key in code, in a commit, or in your reply. They live in `.env`.
 - Phone calls are optional in this workshop and need Twilio plus a paid Alebex
   account. Build and test the tools without them.
@@ -41,18 +53,19 @@ Everything below is the Alebex documentation, unchanged.
 
 ---
 
-# Alebex Voice API: phone calls integration guide
+# Alebex Voice API: agents and phone calls integration guide
 
-Place an outbound phone call that an Alebex voice agent conducts, give the agent
-HTTPS tools it may call mid-conversation, and receive a report when the call ends.
-This file is the whole contract for the phone-call path; you do not need any other
-document or an SDK.
+Create and edit Alebex voice agents and the HTTPS tools they may call mid-conversation,
+place an outbound phone call that one of them conducts, and receive a report
+when the call ends. This file is the whole contract; you do not need any other document
+or an SDK.
 
 ## What you have
 
 **An Alebex account with a developer console** at `https://app.alebex.ai/dev`, where
-an agent is built (its prompt, voice and model), its **agent id** is copied, and the
-end-of-call webhook URL is set.
+agents can be built (or built with **Manage agents** below), agent ids are copied, and
+the end-of-call webhook URL is set. The console's **.env file** button, under the Voice
+API key, downloads your keys and the hosts below as `ALEBEX_*` variables.
 
 **An API key**, fetched once with your normal Alebex login token:
 
@@ -86,14 +99,228 @@ account, so you pay Twilio for the carrier leg and Alebex bills the agent's minu
 ## Hosts
 
 ```
-Alebex API, for the key:      https://api.alebex.ai/api/v1
-Voice Engine, for calls:      https://api.voice.alebex.ai
+Alebex API, for the key, agents, tools and voices:   https://api.alebex.ai/api/v1   (ALEBEX_API_URL)
+Voice Engine, for calls:                             https://api.voice.alebex.ai    (ALEBEX_ENGINE_URL)
 ```
 
-Every engine request carries the API key as a bearer token:
+Every request to either host carries the API key as a bearer token:
 
 ```
 Authorization: Bearer wt_xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+## Manage agents
+
+Agents can be built in the console or through these endpoints. Both make the same
+agent: one made here opens and edits normally in the console, and the other way round.
+They live on the Alebex API host and take the same API key as calls:
+
+```
+Authorization: Bearer <API key>
+```
+
+| Method and path | Does |
+|---|---|
+| `GET /api/v1/public/agents` | List agents, newest first. `?limit=` 1 to 100 (default 25), `?cursor=` the previous page's `nextCursor`. Returns `{ items, nextCursor }`; items are summaries without the prompt. |
+| `GET /api/v1/public/agents/{agentId}` | One agent, every setting. |
+| `POST /api/v1/public/agents` | Create an agent. `201` with the agent. |
+| `PATCH /api/v1/public/agents/{agentId}` | Change only the fields you send. `200` with the whole agent. |
+| `GET /api/v1/public/voices` | The voices an agent can use. |
+
+### The agent
+
+Only `name` and `prompt` are required on create; everything else has the console's
+default. The response is the same shape for get, create and edit.
+
+```json
+{
+  "name": "Admissions line",
+  "prompt": "You answer questions about the evening MBA and book consultations...",
+  "firstMessage": "Hi, this is Maya from Northfield. Is now a good time?",
+  "firstMessageInbound": null,
+  "brainTier": "premium",
+  "temperature": 0.7,
+  "maxTokens": 2500,
+  "voices": [{ "voiceId": "<from GET /public/voices>", "language": "en" }],
+  "behaviour": {
+    "turnEnd": "fast",
+    "allowEndCall": true,
+    "idlePrompt": false,
+    "backgroundVolume": 0.5,
+    "callLimitMinutes": 15
+  },
+  "opening": { "speaksFirst": true, "strictFirstMessage": true, "callerFirstWaitMs": 2500 },
+  "toolIds": ["<from GET /public/tools>"]
+}
+```
+
+| Field | Rules | Default |
+|---|---|---|
+| `name` | 1 to 255 characters, unique in the account. Required on create. | |
+| `prompt` | 1 to 50,000 characters. Required on create. | |
+| `firstMessage` | Up to 2,000 characters. Cannot be null. | `"Hello! How can I help you today?"` |
+| `firstMessageInbound` | Up to 2,000 characters, or null to use `firstMessage`. | `null` |
+| `brainTier` | `"standard"` or `"premium"`. | `"premium"` |
+| `temperature` | 0 to 2. | `0.7` |
+| `maxTokens` | 100 to 5,000. | `2500` |
+| `voices` | 1 to 5, one per language; the first is the default. Each: `voiceId` (required), `language` (ISO 639-1), `speed` (0.5 to the voice's `speedMax`), `stability`, `similarityBoost`, `style` (0 to 1). Unset tuning is `null`. | Maile, English |
+| `behaviour.turnEnd` | `"risky"`, `"ultra_fast"`, `"fast"`, `"middle"`, `"conservative"`: how soon the agent answers once the caller stops. | `"fast"` |
+| `behaviour.allowEndCall` | The agent may hang up. | `true` |
+| `behaviour.idlePrompt` | Nudge a quiet caller. | `false` |
+| `behaviour.backgroundVolume` | 0 to 1, office ambience. | `0.5` |
+| `behaviour.callLimitMinutes` | 1 to 120, or null for no limit. | `null` |
+| `opening.speaksFirst` | The agent speaks first; false lets the caller. | `true` |
+| `opening.strictFirstMessage` | Say `firstMessage` word for word. | `true` |
+| `opening.callerFirstWaitMs` | 500 to 10,000: wait for the caller before speaking, when `speaksFirst` is false. | `2500` |
+| `toolIds` | Up to 8 ids from **Manage tools**, in order, each once. Every call this agent takes carries exactly these. `[]` detaches them all, apart from any parked in the console. | `[]` |
+
+**Editing.** Send at least one field. `behaviour` and `opening` merge key by key;
+`voices` and `toolIds` replace the whole list; `null` clears `firstMessageInbound` and
+`behaviour.callLimitMinutes`. Unknown fields are refused, never ignored. The next call
+uses the new settings; calls in progress keep the old ones.
+
+**Voices.** `GET /public/voices` returns
+`[{ voiceId, name, language, description, sampleUrl, premium, speedMax }]`. Cache it;
+it changes rarely.
+
+### Agent errors
+
+These use the Alebex API's envelope, not the engine's:
+`{ "success": false, "error": { "code": "AGENT_NAME_TAKEN", "message": "...", "status": 409 } }`.
+Branch on `error.code`.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `400` | `VALIDATION_FAILED` | A field is missing, out of range, or unknown. `message` names each one, e.g. `voices[1].voiceId`. |
+| `400` | `INVALID_CURSOR` | List only: the cursor was not one it returned. Start again without it. |
+| `401` | `API_KEY_MISSING`, `SESSION_UNKNOWN`, `SESSION_REVOKED` | No key, an unknown key (or your speech-to-text key, or a short-lived test-call token), or a rotated one. |
+| `403` | `ACCOUNT_SUSPENDED` | The account is not active. |
+| `404` | `AGENT_NOT_FOUND` | No agent with that id in your account. |
+| `404` | `TOOL_NOT_FOUND` | One of `toolIds` is not a tool in your account. |
+| `409` | `AGENT_NAME_TAKEN` | Another agent has that name. |
+| `422` | `VOICE_NOT_FOUND` | A `voiceId` is not in the voice list. |
+| `429` | `RATE_LIMITED` | Over 60 writes or 120 reads a minute on this key. Back off. |
+
+### Example: Node
+
+```js
+const API = process.env.ALEBEX_API_URL;                     // https://api.alebex.ai/api/v1
+const headers = {
+  Authorization: `Bearer ${process.env.ALEBEX_API_KEY}`,
+  "Content-Type": "application/json",
+};
+
+async function alebex(method, path, body) {
+  const res = await fetch(`${API}${path}`, { method, headers, body: body && JSON.stringify(body) });
+  const json = await res.json();
+  if (!res.ok) throw Object.assign(new Error(json.error.message), { code: json.error.code });
+  return json;
+}
+
+const [voice] = await alebex("GET", "/public/voices");
+const agent = await alebex("POST", "/public/agents", {
+  name: "Admissions line",
+  prompt: "You answer questions about the evening MBA and book consultations...",
+  voices: [{ voiceId: voice.voiceId }],
+});
+await alebex("PATCH", `/public/agents/${agent.id}`, { behaviour: { callLimitMinutes: 10 } });
+// agent.id is the agentId for POST /public/call/phone.
+```
+
+### Example: Python
+
+```python
+import os, requests
+
+API = os.environ["ALEBEX_API_URL"]                           # https://api.alebex.ai/api/v1
+session = requests.Session()
+session.headers["Authorization"] = f"Bearer {os.environ['ALEBEX_API_KEY']}"
+
+def alebex(method, path, body=None):
+    res = session.request(method, API + path, json=body)
+    if not res.ok:
+        err = res.json()["error"]
+        raise RuntimeError(f"{err['code']}: {err['message']}")
+    return res.json()
+
+voice = alebex("GET", "/public/voices")[0]
+agent = alebex("POST", "/public/agents", {
+    "name": "Admissions line",
+    "prompt": "You answer questions about the evening MBA and book consultations...",
+    "voices": [{"voiceId": voice["voiceId"]}],
+})
+alebex("PATCH", f"/public/agents/{agent['id']}", {"behaviour": {"callLimitMinutes": 10}})
+
+# Every agent, page by page.
+cursor = None
+while True:
+    page = alebex("GET", "/public/agents" + (f"?cursor={cursor}" if cursor else ""))
+    for item in page["items"]:
+        print(item["id"], item["name"])
+    cursor = page["nextCursor"]
+    if not cursor:
+        break
+```
+
+## Manage tools
+
+A tool can ride on each call (see **Custom tools**), or be stored once in your account
+and attached to agents. One stored here opens and edits on the console's Tools page, and
+the other way round. Same host and API key as agents.
+
+| Method and path | Does |
+|---|---|
+| `GET /api/v1/public/tools` | Every tool, most recently changed first. Returns `{ items }`. There is no route for one tool: find it in this list by `id`. |
+| `POST /api/v1/public/tools` | Create a tool. `201` with the tool. |
+| `PATCH /api/v1/public/tools/{toolId}` | Change only the fields you send. `200` with the whole tool. |
+| `DELETE /api/v1/public/tools/{toolId}` | Delete it and detach it from every agent. `204`. |
+
+The body is the **tool object** from **Custom tools** without `timeoutMs`: `name`,
+`description`, `url`, `parameters` (optional for a tool with no arguments) and `headers`.
+The response adds `id`, `headerNames`, `agentIds` (the agents it is on), `createdAt` and
+`updatedAt`. It never contains a header value.
+
+**Attaching.** Put the tool's id in the agent's `toolIds` with `PATCH /public/agents/{agentId}`.
+The list you send is the list the agent has: to attach, send the current list plus the id;
+to detach, send it without. A tool parked on the agent in the console is not in `toolIds`
+and stays parked whatever you send; listing its id switches it back on. A call placed with
+its own `customTools` array uses that array and ignores the agent's tools.
+
+**Editing.** `headers` merges by name: a string sets or replaces that header, `null` deletes
+it. `parameters` replaces the whole schema. Rotate a leaked key with
+`PATCH {"headers": {"Authorization": "Bearer <new>"}}`. The next call uses the change; calls in
+progress keep the old version.
+
+**Timeout.** A stored tool waits 8000 ms for your endpoint. Send the tool with the call if
+it needs a different `timeoutMs`.
+
+### Tool errors
+
+Same envelope as agent errors. Key errors and `429` are as for agents.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `400` | `VALIDATION_FAILED` | A field is missing or breaks a rule in **Custom tools**: a reserved name, a refused schema keyword, a private or non-https URL, more than 10 headers. `message` names it, e.g. `parameters.properties.sku.type`. |
+| `404` | `TOOL_NOT_FOUND` | No tool with that id in your account. |
+| `409` | `TOOL_NAME_TAKEN` | Another tool has that name. |
+
+### Example: Node
+
+Uses the `alebex` helper from **Manage agents**.
+
+```js
+const tool = await alebex("POST", "/public/tools", {
+  name: "check_stock",
+  description: "Check whether a product is in stock at a given store...",
+  url: "https://partner.example.com/voice-tools/check-stock",
+  headers: { Authorization: `Bearer ${process.env.TOOL_SECRET}` },
+  parameters: { type: "object", properties: { sku: { type: "string" } }, required: ["sku"] },
+});
+const agent = await alebex("GET", `/public/agents/${agentId}`);
+await alebex("PATCH", `/public/agents/${agentId}`, { toolIds: [...agent.toolIds, tool.id] });
+
+// After a leak: one request, and the old value is gone.
+await alebex("PATCH", `/public/tools/${tool.id}`, { headers: { Authorization: `Bearer ${newSecret}` } });
 ```
 
 ## Place a phone call
@@ -163,11 +390,12 @@ a holding line, POSTs to your URL with arguments extracted from what the caller 
 waits for your response and hands it straight back to the model to phrase for the
 phone.
 
-**Tools travel with the call.** Nothing is registered ahead of time, nothing is
-cached, and Alebex stores nothing about them. Each call carries its own tools and
-they are gone when it ends. Because of that, a different URL or header per call is
-simply a different request body: put a task id in the URL path or a header and your
-side can route on it.
+**Two ways a call gets its tools.** Attach stored tools to the agent (**Manage tools**)
+and every call it takes carries them. Or send a `customTools` array with the call, and
+that call carries exactly those: the agent's attached tools are set aside, never merged.
+A tool sent with a call is not stored and is gone when the call ends, so a different URL
+or header per call is simply a different request body: put a task id in the URL path or
+a header and your side can route on it.
 
 The same array rides on a browser call's `start_call` frame when your own code opens
 the socket: `{"type": "start_call", "agent": {"id": "…"}, "customTools": [...]}`. A
@@ -176,7 +404,7 @@ socket closes with `1008`, the same close code as a bad token, so branch on the
 frame's `code`. A page that opens the socket can read the tool `headers` and the API key
 on the URL alike, so open the socket from your server, or proxy it, and put a
 short-lived per-call token in `headers` rather than a live key. The test call on the
-console's Voice Agents page sends the agent id alone, so it never carries tools. The
+console's Voice Agents page sends the agent id alone, so it carries the agent's attached tools. The
 rest of this guide stays with the phone call.
 
 ### The tool object
@@ -525,7 +753,8 @@ def call_lead(to: str, task_id: str) -> dict:
 ## Checklist before you ship
 
 - The API key and the Twilio auth token live on your server, never in a browser or a
-  repository.
+  repository. The same goes for the downloaded `.env` file.
+- Agent writes branch on `error.code`; `VALIDATION_FAILED` names the field to fix.
 - A rotation after a leak counts as done only when `previousTokenDeleted` came back
   `true`.
 - Your tool URLs are `https://` on a public host and answer within your `timeoutMs`;
@@ -535,6 +764,9 @@ def call_lead(to: str, task_id: str) -> dict:
 - Tool requests reach your own records through the task id you put in the URL or a
   header at dial time; `call.id` is the engine's id, not the Twilio SID.
 - Tool names avoid the reserved list and are unique within the call.
+- Tools are attached by sending the agent's whole `toolIds` list, and a call sent with
+  `customTools` uses only those.
+- A leaked tool key is rotated with `PATCH /public/tools/{toolId}` and its `headers`.
 - Your webhook answers `2xx`, downloads `recordingUrl` on arrival, and treats a
   repeated `id` as the same call.
 - `400` responses are read: `detail` says exactly which tool field was refused, and

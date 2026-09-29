@@ -60,22 +60,30 @@ if (customTools.length === 0) {
   console.warn('PUBLIC_BASE_URL is not set to your deployed https site, so this call carries no tools.\n');
 }
 
-const res = await fetch('https://api.voice.alebex.ai/public/call/phone', {
+// Two ways a call gets its tools. If you leave customTools out, the call uses
+// whatever tools are attached to the agent in the console (the easy route).
+// If you send the array, the call uses exactly that array and the attached
+// ones are set aside — so an EMPTY array would silently strip them. Only send
+// it when there is something in it.
+const engine = (process.env.ALEBEX_ENGINE_URL || 'https://api.voice.alebex.ai').replace(/\/$/, '');
+const payload = {
+  agentId: process.env.ALEBEX_AGENT_ID,
+  to,
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID,
+    authToken: process.env.TWILIO_AUTH_TOKEN,
+    phoneNumber: process.env.TWILIO_CALLER_ID,
+  },
+  ...(customTools.length > 0 ? { customTools } : {}),
+};
+
+const res = await fetch(`${engine}/public/call/phone`, {
   method: 'POST',
   headers: {
     Authorization: `Bearer ${process.env.ALEBEX_API_KEY}`,
     'Content-Type': 'application/json',
   },
-  body: JSON.stringify({
-    agentId: process.env.ALEBEX_AGENT_ID,
-    to,
-    twilio: {
-      accountSid: process.env.TWILIO_ACCOUNT_SID,
-      authToken: process.env.TWILIO_AUTH_TOKEN,
-      phoneNumber: process.env.TWILIO_CALLER_ID,
-    },
-    customTools,
-  }),
+  body: JSON.stringify(payload),
 });
 
 const body = await res.json().catch(() => ({}));
@@ -93,7 +101,7 @@ function explain(status, code) {
   if (code === 'PHONE_REQUIRES_PAID_ACCOUNT') return 'Your Alebex account is still on trial. Trial accounts cannot dial real numbers.';
   if (code === 'COMMUNICATIONS_ATTESTATION_REQUIRED') return 'Accept the Communications Policy in the Alebex console, then try again.';
   if (code === 'AGENT_NOT_FOUND' || code === 'AGENT_NOT_IN_ACCOUNT') return 'Check ALEBEX_AGENT_ID against the id in your console.';
-  if (status === 400) return 'One of your customTools was refused. `detail` names the exact field. Nothing was dialled.';
+  if (status === 400) return 'One of the tools sent with the call was refused. `detail` names the exact field. Nothing was dialled.';
   if (status === 401) return 'Your ALEBEX_API_KEY is wrong or was rotated. Fetch it again from the console.';
   if (status === 422) return 'Twilio rejected this. Check that `to` is E.164 and that TWILIO_CALLER_ID is a Voice number on that Twilio account. On a trial Twilio account the number you are calling must be verified first.';
   if (status === 429) return 'Out of allowance, or too many calls at once. Wait and retry.';
@@ -108,7 +116,7 @@ function loadEnv() {
       if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
     }
   } catch {
-    console.error('No .env file found. Copy .env.example to .env and fill it in.');
+    console.error('No .env file found. In the Alebex console, under the Voice API key, press ".env file" and save the download into this folder as .env.');
     process.exit(1);
   }
 }

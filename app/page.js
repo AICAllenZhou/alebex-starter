@@ -4,8 +4,10 @@
 export const dynamic = 'force-dynamic';
 
 const REQUIRED = [
-  ['ALEBEX_API_KEY', 'Alebex console → API key'],
-  ['ALEBEX_AGENT_ID', 'Alebex console → your agent'],
+  ['ALEBEX_API_KEY', 'in the .env file the console downloads'],
+  ['ALEBEX_AGENT_ID', 'in the .env file the console downloads'],
+  ['ALEBEX_API_URL', 'in the .env file the console downloads'],
+  ['ALEBEX_ENGINE_URL', 'in the .env file the console downloads'],
   ['TOOL_SECRET', 'you invent this one'],
   ['PUBLIC_BASE_URL', 'your deployed https URL'],
 ];
@@ -42,7 +44,8 @@ export default function Home() {
             <span className="muted">custom tool</span>
           </div>
           <p className="muted" style={{ margin: '8px 0 0' }}>
-            Goes in the <code>customTools</code> array when you start a call.
+            Register this address on the console&rsquo;s Tools page and attach it to your agent —
+            or send it with a call in <code>scripts/call.mjs</code>.
             <br />
             <code>{base}/api/tools/check-stock</code>
           </p>
