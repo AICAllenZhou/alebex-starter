@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 const REQUIRED = [
   ['ALEBEX_API_KEY', 'in the .env file the console downloads'],
-  ['ALEBEX_AGENT_ID', 'in the .env file the console downloads'],
+  ['ALEBEX_AGENT_ID', 'you add this line yourself, from your agent in the console'],
   ['ALEBEX_API_URL', 'in the .env file the console downloads'],
   ['ALEBEX_ENGINE_URL', 'in the .env file the console downloads'],
   ['TOOL_SECRET', 'you invent this one'],

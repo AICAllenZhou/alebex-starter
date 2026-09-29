@@ -5,7 +5,8 @@ A voice agent you build by talking to your AI coding tool. No prior coding neede
 ```bash
 npm install
 # In the Alebex console (app.alebex.ai/dev), under the Voice API key, press
-# ".env file" and save the download into this folder as .env.
+# ".env file" and save the download into this folder as .env, then add
+# one line to it: ALEBEX_AGENT_ID=<the id on your agent's page>.
 npm run dev              # http://localhost:3000
 ```
 
