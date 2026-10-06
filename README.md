@@ -16,14 +16,33 @@ Open this folder in **Claude Code** or **Cursor** and ask for what you want, for
 > appointment and can look up their booking. Write the tool and tell me what to put
 > in the Alebex console.
 
-`AGENTS.md` holds the full Alebex Voice API contract and both tools read it
-automatically — your AI already knows the API before you say anything.
+`AGENTS.md` holds the full Alebex Voice API contract, and `PROMPTING.md` is Alebex's
+guide to writing an agent that sounds like a person on the phone. Folder tools read
+both automatically, so your AI knows the API and the house style before you say
+anything.
+
+## Three places things live
+
+The single most useful thing to get right. Put each thing where it belongs and
+most of the work disappears:
+
+| Where | What goes there | Needs code? |
+|---|---|---|
+| The agent, in the console | Who it is, how it behaves, its voice | No |
+| `knowledge-base.md` | Facts that just sit there: hours, prices, policies | No |
+| `app/api/tools/...` | Things that change, or that the agent must *do* | Yes |
+
+`npm run call` sends `knowledge-base.md` with the call automatically. Editing that
+file is the fastest way to make your agent smarter, and it involves no code at all.
+Reach for a tool only when the answer is different every time.
 
 ## What's in here
 
 | Path | What it is |
 |---|---|
 | `AGENTS.md` | The whole Alebex Voice API. Your AI's source of truth. |
+| `PROMPTING.md` | How to write the agent's prompt so it sounds human. |
+| `knowledge-base.md` | Facts your agent looks up on a call. Edit this first. |
 | `app/api/tools/check-stock/route.js` | An example custom tool. Rename it, rewrite it. |
 | `app/api/alebex/end-of-call/route.js` | Receives the transcript and recording when a call ends. |
 | `app/page.js` | A status page showing your endpoint URLs and which env vars are set. |
@@ -47,8 +66,11 @@ npm run call -- +16045551234
 ```
 
 Trial Twilio accounts can only call numbers you have verified, and trial Alebex
-accounts cannot place phone calls at all — the script explains either error if you
-hit it.
+accounts cannot place phone calls at all. The second one comes back as a bare
+`502` that reads like a server fault; the script spells out what it really means.
+
+To let people call **in**, you do not need this script at all: import your Twilio
+number on the Phone Numbers page in the Alebex console and assign an agent to it.
 
 ## Never commit
 

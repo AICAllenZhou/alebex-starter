@@ -100,8 +100,14 @@ export default function Home() {
       <h2>Next</h2>
       <p>
         Open this folder in Claude Code or Cursor and ask it to build your agent.
-        Everything it needs about the API is in <code>AGENTS.md</code>, which those
-        tools read automatically.
+        Everything it needs is in <code>AGENTS.md</code> (the API) and{' '}
+        <code>PROMPTING.md</code> (how to write the agent), which those tools read
+        automatically.
+      </p>
+      <p className="muted">
+        Before you write a tool, check whether you need one. Facts that just sit
+        there — hours, prices, policies — go in <code>knowledge-base.md</code>, which{' '}
+        <code>npm run call</code> sends with the call. No code, no deploy.
       </p>
     </main>
   );
