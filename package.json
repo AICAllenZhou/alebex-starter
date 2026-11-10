@@ -7,11 +7,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "call": "node scripts/call.mjs"
+    "call": "node scripts/call.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test components/call/audio/pcm.test.ts components/call/transport/parseRelayEvent.test.ts"
   },
   "dependencies": {
+    "gsap": "^3.15.1",
     "next": "15.5.26",
     "react": "19.1.0",
     "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@tailwindcss/postcss": "^4.3.5",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.6",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3"
   }
 }

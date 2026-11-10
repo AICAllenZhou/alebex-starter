@@ -20,7 +20,7 @@ export async function POST(request) {
   // 3. `call.id` is the engine's id for this call. It is NOT the Twilio call SID.
   //    Use it to make side effects safe: the model may call the same tool twice
   //    in one turn, so key anything you book, charge or send on call.id + args.
-  const callId = body.call?.id;
+  void body.call?.id;
 
   const stock = lookUpStock(args.sku, args.size);
 

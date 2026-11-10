@@ -10,6 +10,25 @@ npm install
 npm run dev              # http://localhost:3000
 ```
 
+
+## Browser voice test page
+
+The home page (`/`) is a minimal call UI for the Demo Studio cloud smoke test:
+start and end a browser voice session. The previous tools dashboard now lives
+at `/status`.
+
+`POST /api/session` returns a mid-tier `relayUrl` and a one-time 60-second
+token. The page never receives `ALEBEX_API_KEY`. The client opens `relayUrl`
+without putting the token in the URL, then sends `{"type":"auth","token":"..."}`
+as the first WebSocket frame. Close code `4401` or `{type:"error",code:"token_expired"}`
+means the token is dead; 重新开始 fetches a fresh one. `{type:"ended",reason}`
+distinguishes `user_hangup` and `duration_limit`. Audio is provisional PCM16
+mono 16 kHz in 20 ms frames.
+
+When `RELAY_URL` is unset, or when the page is opened with `?mock=1`, a mock
+event source drives the call states (connecting, idle, listening, speaking,
+ended, error).
+
 Open this folder in **Claude Code** or **Cursor** and ask for what you want, for example:
 
 > Read AGENTS.md. I want a voice agent that calls a customer to confirm tomorrow's
