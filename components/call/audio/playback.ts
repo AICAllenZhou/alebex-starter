@@ -1,18 +1,20 @@
 import { PLAYBACK } from './format';
-import { MarkHold, nextScheduleTime, shouldEchoImmediately } from './markHold';
+import { nextScheduleTime } from './markHold';
 import { decodeBase64Pcm16 } from './pcm';
 
 /**
- * Schedules downlink {type:"audio"} chunks on AudioBufferSourceNodes.
- * The first chunk starts ~180 ms ahead; later chunks are gapless.
- * Marks are echoed only after audio queued before them has finished.
- * clear_audio stops every scheduled/playing source, then flushes marks.
+ * Schedules downlink {type:"audio"} chunks on AudioBufferSourceNodes,
+ * following the official Alebex browser playback sample:
+ *  - first chunk starts ~180 ms ahead; later chunks are gapless (playhead);
+ *  - a mark is held and echoed only when nothing is playing
+ *    (playing.size === 0), either on arrival or when the last source ends;
+ *  - clear_audio stops every source, resets the playhead to 0, then echoes
+ *    every held mark.
  */
 export class DownlinkPlayer {
-  private nextTime = 0;
-  private sources = new Set<AudioBufferSourceNode>();
-  private marks = new MarkHold();
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private playhead = 0;
+  private playing = new Set<AudioBufferSourceNode>();
+  private heldMarks: string[] = [];
   private stopped = false;
 
   constructor(
@@ -34,58 +36,48 @@ export class DownlinkPlayer {
     source.buffer = buffer;
     source.connect(this.context.destination);
 
-    const now = this.context.currentTime;
-    const startAt = nextScheduleTime(now, this.nextTime, PLAYBACK.leadSeconds);
-    this.nextTime = startAt + buffer.duration;
-    this.sources.add(source);
+    const startAt = nextScheduleTime(this.context.currentTime, this.playhead, PLAYBACK.leadSeconds);
+    this.playhead = startAt + buffer.duration;
+    this.playing.add(source);
     source.onended = () => {
-      this.sources.delete(source);
-      this.flushDueMarks();
+      this.playing.delete(source);
+      if (this.playing.size === 0) this.sendHeldMarks();
     };
     try {
       source.start(startAt);
     } catch {
-      this.sources.delete(source);
+      this.playing.delete(source);
+      if (this.playing.size === 0) this.sendHeldMarks();
     }
-    this.armTimer();
   }
 
   holdMark(raw: string): void {
     if (this.stopped) return;
-    const now = this.context.currentTime;
-    if (shouldEchoImmediately(now, this.nextTime)) {
-      this.onEchoMark(raw);
-      return;
-    }
-    this.marks.hold(raw, this.nextTime);
-    this.armTimer();
+    this.heldMarks.push(raw);
+    if (this.playing.size === 0) this.sendHeldMarks();
   }
 
-  /** Stop every source (playing or scheduled) and echo all held marks now. */
+  /** Stop every source, reset the playhead to 0, and echo all held marks. */
   clearAudio(): void {
     this.stopAllSources();
-    this.nextTime = 0;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    const flushed = this.marks.flush();
-    for (const mark of flushed) this.onEchoMark(mark.raw);
+    this.playhead = 0;
+    this.sendHeldMarks();
   }
 
   stop(): void {
     this.stopped = true;
     this.stopAllSources();
-    this.nextTime = 0;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    this.marks.flush();
+    this.playhead = 0;
+    this.heldMarks = [];
+  }
+
+  private sendHeldMarks(): void {
+    if (this.stopped) return;
+    while (this.heldMarks.length) this.onEchoMark(this.heldMarks.shift() as string);
   }
 
   private stopAllSources(): void {
-    for (const source of this.sources) {
+    for (const source of this.playing) {
       source.onended = null;
       try {
         source.stop();
@@ -98,28 +90,6 @@ export class DownlinkPlayer {
         /* already disconnected */
       }
     }
-    this.sources.clear();
-  }
-
-  private flushDueMarks(): void {
-    if (this.stopped) return;
-    const due = this.marks.releaseDue(this.context.currentTime);
-    for (const mark of due) this.onEchoMark(mark.raw);
-    this.armTimer();
-  }
-
-  private armTimer(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    if (this.stopped || this.marks.size === 0) return;
-    const next = this.marks.peek()[0];
-    if (!next) return;
-    const delayMs = Math.max(0, (next.releaseAt - this.context.currentTime) * 1000) + 5;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.flushDueMarks();
-    }, delayMs);
+    this.playing.clear();
   }
 }
