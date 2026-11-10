@@ -1,6 +1,5 @@
 /**
- * Pure PCM / resample helpers. Safe to unit-test in Node; the AudioWorklets
- * use the same algorithms (see workletSource.ts).
+ * Pure PCM / resample / base64 helpers. Safe to unit-test in Node.
  */
 export function resampleLinear(
   input: Float32Array,
@@ -55,4 +54,42 @@ export function encodePcm16Frame(
 
 export function decodePcm16Frame(buffer: ArrayBuffer): Float32Array {
   return pcm16ToFloat(new Int16Array(buffer));
+}
+
+export function decodeBase64(data: string): Uint8Array {
+  const trimmed = data.replace(/\s/g, '');
+  if (typeof atob === 'function') {
+    const bin = atob(trimmed);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  return Uint8Array.from(Buffer.from(trimmed, 'base64'));
+}
+
+export function encodeBase64(bytes: Uint8Array): string {
+  if (typeof btoa === 'function') {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i] ?? 0);
+    return btoa(binary);
+  }
+  return Buffer.from(bytes).toString('base64');
+}
+
+/** Decode a base64 PCM16 LE mono payload into Float32 samples in [-1, 1]. */
+export function decodeBase64Pcm16(data: string): Float32Array {
+  const bytes = decodeBase64(data);
+  const even = bytes.byteLength - (bytes.byteLength % 2);
+  if (even <= 0) return new Float32Array(0);
+  const aligned =
+    bytes.byteOffset % 2 === 0 && even === bytes.byteLength
+      ? bytes
+      : bytes.slice(0, even);
+  const samples = new Int16Array(aligned.buffer, aligned.byteOffset, even / 2);
+  return pcm16ToFloat(samples);
+}
+
+export function encodeBase64Pcm16(samples: Float32Array): string {
+  const pcm = floatToPcm16(samples);
+  return encodeBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
 }

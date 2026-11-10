@@ -1,25 +1,34 @@
 import { RELAY_CLOSE } from '../audio/format';
-import { startCallAudio, type CallAudio } from '../audio/session';
+import { DownlinkPlayer } from '../audio/playback';
+import { startUplinkCapture, type UplinkCapture } from '../audio/session';
 import { parseRelayEvent } from './parseRelayEvent';
-import type { SessionTransport } from './types';
+import type { RelayEvent, SessionTransport } from './types';
 
 /**
  * Live mid-tier adapter. Confirmed contract:
  *  - Connect to relayUrl as given; do not put the token in the URL.
  *  - After the socket opens, send {"type":"auth","token":"..."} as the first frame.
- *  - JSON events: {type:"state",state}, {type:"error",code}, {type:"ended",reason}.
+ *  - Our events: {type:"state",state}, {type:"error",code}, {type:"ended",reason}.
  *  - Close code 4401 (and/or error code token_expired) means the token is dead.
- *  - Binary frames are provisional PCM16 mono 16 kHz, 20 ms (640 bytes).
+ *  - Uplink: binary PCM16 LE 16 kHz mono 20 ms, only after call_started.
+ *  - Downlink: JSON {type:"audio",data,format,sample_rate}; read sample_rate
+ *    per frame; schedule AudioBufferSourceNodes (180 ms lead, then gapless).
+ *  - Marks are held until preceding audio finishes, then echoed unchanged.
+ *  - clear_audio stops every source, then echoes all held marks immediately.
+ *  - Hang up sends {type:"end_call"} then closes.
  *
  * Never import, read, or send ALEBEX_API_KEY from this module.
  */
 export function createWebSocketTransport(): SessionTransport {
   let socket: WebSocket | null = null;
-  let audio: CallAudio | null = null;
+  let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
+  let player: DownlinkPlayer | null = null;
+  let uplink: UplinkCapture | null = null;
   let closedByUser = false;
   let settled = false;
-  let audioStarted = false;
+  let callStarted = false;
+  let uplinkStarted = false;
 
   const releaseStream = () => {
     mediaStream?.getTracks().forEach((track) => track.stop());
@@ -27,11 +36,14 @@ export function createWebSocketTransport(): SessionTransport {
   };
 
   const stopAudio = () => {
-    const current = audio;
-    audio = null;
-    audioStarted = false;
-    void current?.stop();
+    player?.stop();
+    player = null;
+    const currentUplink = uplink;
+    uplink = null;
+    uplinkStarted = false;
+    void currentUplink?.stop();
     releaseStream();
+    audioContext = null;
   };
 
   const settle = () => {
@@ -39,45 +51,63 @@ export function createWebSocketTransport(): SessionTransport {
     stopAudio();
   };
 
-  const ensureAudio = (
-    onUplink: (frame: ArrayBuffer) => void,
-    onEvent: Parameters<SessionTransport['start']>[0]['onEvent'],
-  ) => {
-    if (audioStarted || !mediaStream) return;
-    audioStarted = true;
-    void startCallAudio(mediaStream, onUplink)
-      .then((session) => {
-        if (settled || closedByUser) {
-          void session.stop();
-          return;
-        }
-        audio = session;
-      })
-      .catch(() => {
-        if (!settled && !closedByUser) {
-          settled = true;
-          stopAudio();
-          onEvent({ type: 'error', code: 'invalid_config' });
-        }
-      });
+  const sendRaw = (raw: string) => {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(raw);
+  };
+
+  const maybeDerive = (state: 'idle' | 'listening' | 'speaking', onEvent: (event: RelayEvent) => void) => {
+    if (settled || closedByUser) return;
+    onEvent({ type: 'state', state, derived: true });
+  };
+
+  const ensurePlayer = (onEvent: (event: RelayEvent) => void) => {
+    if (player || !audioContext) return;
+    player = new DownlinkPlayer(audioContext, (raw) => {
+      sendRaw(raw);
+      maybeDerive('listening', onEvent);
+    });
+    if (audioContext.state === 'suspended') void audioContext.resume();
+  };
+
+  const ensureUplink = () => {
+    if (uplinkStarted || !callStarted || !audioContext || !mediaStream) return;
+    uplinkStarted = true;
+    const stream = mediaStream;
+    const context = audioContext;
+    void startUplinkCapture(context, stream, (frame) => {
+      if (!callStarted || settled || closedByUser) return;
+      if (socket && socket.readyState === WebSocket.OPEN) socket.send(frame);
+    }).then((session) => {
+      if (settled || closedByUser) {
+        void session.stop();
+        return;
+      }
+      uplink = session;
+    }).catch(() => {
+      // Keep the call up so downlink and captions can still run.
+      uplinkStarted = false;
+    });
   };
 
   return {
-    start({ relayUrl, token, mediaStream: stream, onEvent, onDisconnected }) {
+    start({ relayUrl, token, audioContext: context, mediaStream: stream, onEvent, onDisconnected }) {
       closedByUser = false;
       settled = false;
-      audioStarted = false;
+      callStarted = false;
+      uplinkStarted = false;
       mediaStream = stream ?? null;
+      audioContext = context ?? null;
+      player = null;
+      uplink = null;
 
       let url: URL;
       try {
         url = new URL(relayUrl);
       } catch {
         onEvent({ type: 'error', code: 'invalid_config' });
-        releaseStream();
+        stopAudio();
         return;
       }
-      // Token stays off the URL; it goes in the first frame after open.
       if (url.searchParams.has('token')) {
         url.searchParams.delete('token');
       }
@@ -85,12 +115,13 @@ export function createWebSocketTransport(): SessionTransport {
       try {
         socket = new WebSocket(url.toString());
       } catch {
-        releaseStream();
+        stopAudio();
         onDisconnected();
         return;
       }
 
       socket.binaryType = 'arraybuffer';
+      ensurePlayer(onEvent);
 
       socket.addEventListener('open', () => {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -98,14 +129,8 @@ export function createWebSocketTransport(): SessionTransport {
       });
 
       socket.addEventListener('message', (event) => {
-        if (event.data instanceof ArrayBuffer) {
-          audio?.playDownlink(event.data);
-          return;
-        }
-        if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
-          void event.data.arrayBuffer().then((buffer) => audio?.playDownlink(buffer));
-          return;
-        }
+        // Downlink is JSON audio; ignore unexpected binary inbound.
+        if (typeof event.data !== 'string') return;
 
         const parsed = parseRelayEvent(event.data);
         if (!parsed) return;
@@ -113,27 +138,53 @@ export function createWebSocketTransport(): SessionTransport {
         if (parsed.type === 'error') {
           settle();
           onEvent(parsed);
-          if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-            socket.close();
-          }
-          socket = null;
+          closeSocket();
           return;
         }
 
         if (parsed.type === 'ended') {
           settle();
           onEvent(parsed);
-          if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-            socket.close();
-          }
-          socket = null;
+          closeSocket();
           return;
         }
 
-        onEvent(parsed);
-        ensureAudio((frame) => {
-          if (socket && socket.readyState === WebSocket.OPEN) socket.send(frame);
-        }, onEvent);
+        if (parsed.type === 'state') {
+          onEvent(parsed);
+          return;
+        }
+
+        if (parsed.type === 'call_started') {
+          callStarted = true;
+          ensureUplink();
+          onEvent(parsed);
+          maybeDerive('idle', onEvent);
+          return;
+        }
+
+        if (parsed.type === 'audio') {
+          ensurePlayer(onEvent);
+          player?.enqueue(parsed.data, parsed.sampleRate);
+          maybeDerive('speaking', onEvent);
+          return;
+        }
+
+        if (parsed.type === 'mark') {
+          ensurePlayer(onEvent);
+          player?.holdMark(parsed.raw);
+          return;
+        }
+
+        if (parsed.type === 'clear_audio') {
+          ensurePlayer(onEvent);
+          player?.clearAudio();
+          maybeDerive('listening', onEvent);
+          return;
+        }
+
+        if (parsed.type === 'transcript' || parsed.type === 'conversation_message') {
+          onEvent(parsed);
+        }
       });
 
       socket.addEventListener('error', () => {
@@ -168,11 +219,22 @@ export function createWebSocketTransport(): SessionTransport {
     stop() {
       closedByUser = true;
       settled = true;
-      stopAudio();
-      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-        socket.close();
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({ type: 'end_call' }));
+        } catch {
+          /* already closing */
+        }
       }
-      socket = null;
+      closeSocket();
+      stopAudio();
     },
   };
+
+  function closeSocket() {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      socket.close();
+    }
+    socket = null;
+  }
 }

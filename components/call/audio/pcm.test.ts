@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { AUDIO_FORMAT } from './format';
 import {
+  decodeBase64Pcm16,
   decodePcm16Frame,
+  encodeBase64Pcm16,
   encodePcm16Frame,
   floatToPcm16,
   pcm16ToFloat,
@@ -66,5 +68,30 @@ describe('pcm16 encode/decode', () => {
   it('maps silence to zero', () => {
     const zeros = pcm16ToFloat(floatToPcm16(new Float32Array(8)));
     assert.deepEqual(Array.from(zeros), [0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+});
+
+describe('decodeBase64Pcm16', () => {
+  it('round-trips Float32 samples through base64 PCM16', () => {
+    const samples = Float32Array.from([0, 0.25, -0.5, 0.9, -1, 1]);
+    const encoded = encodeBase64Pcm16(samples);
+    assert.ok(encoded.length > 0);
+    assert.equal(/^[A-Za-z0-9+/=]+$/.test(encoded), true);
+    const decoded = decodeBase64Pcm16(encoded);
+    assert.equal(decoded.length, samples.length);
+    for (let i = 0; i < samples.length; i += 1) {
+      assert.ok(Math.abs((decoded[i] ?? 0) - (samples[i] ?? 0)) < 2 / 0x7fff);
+    }
+  });
+
+  it('returns an empty buffer for empty or odd truncated input', () => {
+    assert.equal(decodeBase64Pcm16('').length, 0);
+  });
+
+  it('decodes a 24 kHz silence payload to zeros', () => {
+    const silence = encodeBase64Pcm16(new Float32Array(240));
+    const decoded = decodeBase64Pcm16(silence);
+    assert.equal(decoded.length, 240);
+    assert.ok(decoded.every((sample) => sample === 0));
   });
 });

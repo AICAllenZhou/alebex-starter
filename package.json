@@ -10,7 +10,7 @@
     "call": "node scripts/call.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test components/call/audio/pcm.test.ts components/call/transport/parseRelayEvent.test.ts"
+    "test": "tsx --test components/call/audio/pcm.test.ts components/call/audio/markHold.test.ts components/call/transport/parseRelayEvent.test.ts"
   },
   "dependencies": {
     "gsap": "^3.15.1",

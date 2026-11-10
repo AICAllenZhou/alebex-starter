@@ -22,8 +22,13 @@ token. The page never receives `ALEBEX_API_KEY`. The client opens `relayUrl`
 without putting the token in the URL, then sends `{"type":"auth","token":"..."}`
 as the first WebSocket frame. Close code `4401` or `{type:"error",code:"token_expired"}`
 means the token is dead; 重新开始 fetches a fresh one. `{type:"ended",reason}`
-distinguishes `user_hangup` and `duration_limit`. Audio is provisional PCM16
-mono 16 kHz in 20 ms frames.
+distinguishes `user_hangup` and `duration_limit`. Mic uplink is raw PCM16 LE, 16 kHz mono, 20 ms frames, and is not sent
+before `call_started`. Downlink audio is JSON `{type:"audio",data,format,sample_rate}`
+(sample rate is read per frame, typically 24 kHz). The first chunk starts ~180 ms
+ahead, then chunks are scheduled back-to-back. Marks are echoed after preceding
+audio finishes; `clear_audio` stops every scheduled buffer and flushes held marks.
+Live captions come from `transcript` and `conversation_message`. Hang up sends
+`{type:"end_call"}` then closes the socket.
 
 When `RELAY_URL` is unset, or when the page is opened with `?mock=1`, a mock
 event source drives the call states (connecting, idle, listening, speaking,

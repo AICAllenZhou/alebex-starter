@@ -5,11 +5,28 @@ import { createTransport } from './transport/createTransport';
 import type {
   CallUiState,
   ErrorCode,
+  LiveCaption,
   SessionMode,
   SessionResponse,
   SessionTransport,
+  TranscriptTurn,
 } from './transport/types';
 import { ERROR_CODES, RELAY_STATES } from './transport/types';
+
+const DEMO_TURNS: TranscriptTurn[] = [
+  {
+    id: 'demo-user',
+    role: 'user',
+    text: '伯爵茶戚风蛋糕要提前多久订？',
+    source: 'conversation',
+  },
+];
+
+const DEMO_LIVE: LiveCaption = {
+  role: 'assistant',
+  text: '需要提前 48 小时预订。',
+  isFinal: false,
+};
 
 export interface CallSession {
   state: CallUiState;
@@ -17,6 +34,8 @@ export interface CallSession {
   errorCode: ErrorCode | null;
   endedReason: string | null;
   mode: SessionMode | null;
+  liveCaption: LiveCaption | null;
+  turns: TranscriptTurn[];
   start: () => Promise<void>;
   end: () => void;
   restart: () => Promise<void>;
@@ -41,12 +60,20 @@ export function useCallSession(options: Options): CallSession {
   const [errorCode, setErrorCode] = useState<ErrorCode | null>(initial.errorCode);
   const [endedReason, setEndedReason] = useState<string | null>(initial.endedReason);
   const [mode, setMode] = useState<SessionMode | null>(initial.mode);
+  const [liveCaption, setLiveCaption] = useState<LiveCaption | null>(initial.liveCaption);
+  const [turns, setTurns] = useState<TranscriptTurn[]>(initial.turns);
   const transportRef = useRef<SessionTransport | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const optionsRef = useRef(options);
 
   const tearDown = useCallback(() => {
     transportRef.current?.stop();
     transportRef.current = null;
+    const context = audioContextRef.current;
+    audioContextRef.current = null;
+    if (context && context.state !== 'closed') {
+      void context.close();
+    }
   }, []);
 
   useEffect(() => {
@@ -59,8 +86,32 @@ export function useCallSession(options: Options): CallSession {
     tearDown();
     setErrorCode(null);
     setEndedReason(null);
+    setLiveCaption(null);
+    setTurns([]);
     setState('connecting');
     setInCall(true);
+
+    // Create the AudioContext inside the click handler, before any await,
+    // so the browser treats it as a user gesture.
+    let audioContext: AudioContext | undefined;
+    if (typeof AudioContext !== 'undefined') {
+      try {
+        audioContext = new AudioContext();
+      } catch {
+        audioContext = undefined;
+      }
+    }
+
+    const closeContext = async () => {
+      if (audioContext && audioContext.state !== 'closed') {
+        try {
+          await audioContext.close();
+        } catch {
+          /* already closed */
+        }
+      }
+      audioContext = undefined;
+    };
 
     const forceMock = optionsRef.current.forceMock;
     const useRealMic = !forceMock;
@@ -68,6 +119,7 @@ export function useCallSession(options: Options): CallSession {
 
     if (useRealMic) {
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        await closeContext();
         setState('error');
         setErrorCode('invalid_config');
         setInCall(false);
@@ -83,6 +135,7 @@ export function useCallSession(options: Options): CallSession {
           },
         });
       } catch (error) {
+        await closeContext();
         const name = error instanceof Error ? error.name : '';
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
           setState('mic_denied');
@@ -106,6 +159,7 @@ export function useCallSession(options: Options): CallSession {
       const response = await fetch('/api/session', { method: 'POST' });
       if (!response.ok) {
         releaseIfUnused();
+        await closeContext();
         setState('error');
         setErrorCode('invalid_config');
         setInCall(false);
@@ -114,6 +168,7 @@ export function useCallSession(options: Options): CallSession {
       session = (await response.json()) as SessionResponse;
     } catch {
       releaseIfUnused();
+      await closeContext();
       setState('disconnected');
       setInCall(false);
       return;
@@ -133,10 +188,12 @@ export function useCallSession(options: Options): CallSession {
       mock: {},
     });
     transportRef.current = transport;
+    audioContextRef.current = audioContext ?? null;
 
     transport.start({
       relayUrl: session.relayUrl,
       token: session.token,
+      audioContext,
       mediaStream,
       onEvent: (event) => {
         if (event.type === 'error') {
@@ -155,8 +212,18 @@ export function useCallSession(options: Options): CallSession {
           tearDown();
           return;
         }
-        setState(event.state);
-        setInCall(true);
+        if (event.type === 'transcript') {
+          applyTranscript(event, setLiveCaption, setTurns);
+          return;
+        }
+        if (event.type === 'conversation_message') {
+          applyConversation(event, setLiveCaption, setTurns);
+          return;
+        }
+        if (event.type === 'state') {
+          setState(event.state);
+          setInCall(true);
+        }
       },
       onDisconnected: () => {
         setState('disconnected');
@@ -182,7 +249,55 @@ export function useCallSession(options: Options): CallSession {
     await start();
   }, [start]);
 
-  return { state, inCall, errorCode, endedReason, mode, start, end, restart };
+  return {
+    state,
+    inCall,
+    errorCode,
+    endedReason,
+    mode,
+    liveCaption,
+    turns,
+    start,
+    end,
+    restart,
+  };
+}
+
+function applyTranscript(
+  event: { role?: string; text: string; isFinal: boolean },
+  setLiveCaption: (caption: LiveCaption | null) => void,
+  setTurns: (updater: (prev: TranscriptTurn[]) => TranscriptTurn[]) => void,
+) {
+  if (event.isFinal) {
+    setLiveCaption(null);
+    setTurns((prev) => appendTurn(prev, event.role, event.text, 'transcript'));
+    return;
+  }
+  setLiveCaption({ role: event.role, text: event.text, isFinal: false });
+}
+
+function applyConversation(
+  event: { role?: string; content: string },
+  setLiveCaption: (caption: LiveCaption | null) => void,
+  setTurns: (updater: (prev: TranscriptTurn[]) => TranscriptTurn[]) => void,
+) {
+  setLiveCaption(null);
+  setTurns((prev) => appendTurn(prev, event.role, event.content, 'conversation'));
+}
+
+function appendTurn(
+  prev: TranscriptTurn[],
+  role: string | undefined,
+  text: string,
+  source: TranscriptTurn['source'],
+): TranscriptTurn[] {
+  const last = prev[prev.length - 1];
+  if (last && last.text === text && last.role === role) return prev;
+  const id =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `turn-${prev.length}-${Date.now()}`;
+  return [...prev, { id, role, text, source }];
 }
 
 function normalizeInitial(
@@ -195,6 +310,8 @@ function normalizeInitial(
   errorCode: ErrorCode | null;
   endedReason: string | null;
   mode: SessionMode | null;
+  liveCaption: LiveCaption | null;
+  turns: TranscriptTurn[];
 } {
   if (!initialState) {
     return {
@@ -203,19 +320,21 @@ function normalizeInitial(
       errorCode: null,
       endedReason: null,
       mode: null,
+      liveCaption: null,
+      turns: [],
     };
   }
 
   const errorCode =
     initialState === 'error' ? (initialErrorCode ?? 'token_expired') : null;
 
-  // A pinned "idle" from ?mockState=idle is the in-call idle state. The
-  // landing page (no mockState) stays as pre-call idle, inCall false.
   const inCall =
     initialState === 'connecting' ||
     initialState === 'listening' ||
     initialState === 'speaking' ||
     initialState === 'idle';
+
+  const showDemoCaptions = initialState === 'speaking';
 
   return {
     state: initialState,
@@ -223,6 +342,8 @@ function normalizeInitial(
     errorCode,
     endedReason: initialState === 'ended' ? (initialEndedReason ?? null) : null,
     mode: 'mock',
+    liveCaption: showDemoCaptions ? DEMO_LIVE : null,
+    turns: showDemoCaptions ? DEMO_TURNS : [],
   };
 }
 

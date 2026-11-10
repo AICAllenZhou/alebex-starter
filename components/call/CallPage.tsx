@@ -3,6 +3,7 @@
 import { useSearchParams } from 'next/navigation';
 import { AnimatedContent, ClickSpark, FadeContent } from './motion';
 import { isLiveCallState, isRecoverableState, statusText } from './statusCopy';
+import type { LiveCaption, TranscriptTurn } from './transport/types';
 import { parseEndedReasonParam, parseErrorCode, parseMockState, useCallSession } from './useCallSession';
 import { usePrefersReducedMotion } from './usePrefersReducedMotion';
 
@@ -33,6 +34,7 @@ export default function CallPage() {
   const primaryLabel = recoverable ? '重新开始' : '开始通话';
   const showPrimary = ready || recoverable;
   const showEnd = live;
+  const hasCaptions = session.turns.length > 0 || session.liveCaption !== null;
 
   return (
     <main
@@ -41,6 +43,7 @@ export default function CallPage() {
       data-in-call={session.inCall ? 'true' : 'false'}
       data-error-code={session.errorCode ?? ''}
       data-ended-reason={session.endedReason ?? ''}
+      data-captions={hasCaptions ? 'true' : 'false'}
       data-mock={forceMock || session.mode === 'mock' ? 'true' : 'false'}
     >
       <FadeContent trigger="mount" duration={0.7} blur={false}>
@@ -99,6 +102,54 @@ export default function CallPage() {
           </button>
         ) : null}
       </div>
+
+      {hasCaptions ? (
+        <Captions turns={session.turns} live={session.liveCaption} />
+      ) : null}
     </main>
   );
+}
+
+function Captions({
+  turns,
+  live,
+}: {
+  turns: TranscriptTurn[];
+  live: LiveCaption | null;
+}) {
+  return (
+    <section
+      className="mt-10 w-full max-w-md text-left"
+      aria-label="通话字幕"
+      data-captions-panel
+    >
+      {turns.length > 0 ? (
+        <ol className="space-y-2" data-caption-turns>
+          {turns.map((turn) => (
+            <li key={turn.id} className="text-sm leading-6 text-stone-700">
+              <span className="mr-2 font-medium text-stone-500">{roleLabel(turn.role)}：</span>
+              <span>{turn.text}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {live ? (
+        <p
+          className="mt-2 text-sm italic leading-6 text-stone-500"
+          aria-live="polite"
+          data-caption-live
+        >
+          <span className="mr-2 font-medium not-italic">{roleLabel(live.role)}：</span>
+          {live.text}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function roleLabel(role?: string): string {
+  const value = (role ?? '').toLowerCase();
+  if (value === 'user' || value === 'caller' || value === 'human') return '你';
+  if (value === 'agent' || value === 'assistant' || value === 'ai' || value === 'bot') return '客服';
+  return role ? `${role}` : '客服';
 }
